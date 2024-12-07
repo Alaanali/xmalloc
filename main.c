@@ -3,21 +3,21 @@
 #include <stdbool.h>
 #include <assert.h>
 
-#define align8(x) (((((x) - 1) >> 3) << 3) + 8)
 #define SIZE_MASK -8
 #define FREE_MASK 1
 #define HAS_PREV_MASK 2
 #define HAS_NEXT_MASK 4
 #define BUCKET_COUNT 8
+#define MINIMUM_CHUNK_SIZE 8
 
+#define ALIGN8(x) (((((x) - 1) >> 3) << 3) + 8)
 #define SIZE(p) ((p->size) & SIZE_MASK)
 #define IS_FREE(p) ((p->size) & FREE_MASK)
 #define HAS_PREV(p) ((p->size) & HAS_PREV_MASK)
 #define HAS_NEXT(p) ((p->size) & HAS_NEXT_MASK)
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define IDX(size) ( \
-    MIN(7, ((size) < 9 ? 0 : (63 - __builtin_clzll((size) - 1) - 3))))
+#define IDX(size) (MIN(7, ((size) < 9 ? 0 : (63 - __builtin_clzll((size) - 1) - 3))))
 
 typedef struct Meta_Footer
 {
@@ -99,7 +99,7 @@ m_header_p get_prev_chunk(m_header_p p)
 {
     if (((char *)p <= start) || !HAS_PREV(p))
         return NULL;
-    m_footer_p f = ((m_footer_p)p) - 1;
+    m_footer_p f = (m_footer_p)p - 1;
     char *n = (char *)p;
     n -= META_FOOTER_SIZE + SIZE(f) + META_HEADER_SIZE;
     return (m_header_p)n;
@@ -153,10 +153,38 @@ m_header_p find_chunk(size_t size)
     return NULL;
 }
 
+void split(m_header_p p, size_t size)
+{
+    size_t remaining = SIZE(p) - size - META_HEADER_SIZE - META_FOOTER_SIZE;
+
+    if (remaining < META_HEADER_SIZE + META_FOOTER_SIZE + MINIMUM_CHUNK_SIZE)
+        return;
+
+    m_header_p new = (void *)p + META_HEADER_SIZE + size + META_FOOTER_SIZE;
+    new->size = remaining;
+    new->size |= HAS_PREV_MASK | FREE_MASK | (p->size & HAS_NEXT_MASK);
+
+    p->size = size | (p->size & HAS_PREV_MASK);
+    p->size |= HAS_NEXT_MASK;
+
+    m_footer_p p_f = get_footer(p);
+    p_f->size = p->size;
+
+    m_footer_p new_f = get_footer(new);
+    new_f->size = new->size;
+
+    List *list = free_list[IDX(SIZE(new))];
+
+    new->next = list->head->next;
+    new->prev = list->head;
+
+    list->head->next->prev = new;
+    list->head->next = new;
+}
+
 void *my_malloc(size_t size)
 {
-
-    size = align8(size);
+    size = ALIGN8(size);
     m_header_p p = find_chunk(size);
 
     if (!p)
@@ -171,6 +199,11 @@ void *my_malloc(size_t size)
         last_h->size |= HAS_NEXT_MASK;
         m_footer_p last_f = get_footer(last_h);
         last_f->size = last_h->size;
+    }
+
+    if (SIZE(p) > size)
+    {
+        split(p, size);
     }
 
     p->size &= ~FREE_MASK;
@@ -240,26 +273,21 @@ void my_free(void *p)
 int main()
 {
     init();
-    // Allocate multiple small chunks
     void *p1 = my_malloc(16);
     void *p2 = my_malloc(32);
     void *p3 = my_malloc(64);
 
-    // Free the second chunk
     my_free(p2);
 
-    // Allocate a chunk that fits exactly into the freed space
     void *p4 = my_malloc(32);
     assert(p4 == p2);
 
-    // Free adjacent chunks and test coalescing
     my_free(p1);
     my_free(p3);
     my_free(p4);
 
-    // Allocate a large chunk spanning coalesced space
     void *p5 = my_malloc(112);
-    assert(p5 == p1); // Since p1 was the start of coalesced space
+    assert(p5 == p1);
 
     printf("All tests passed.\n");
 }
