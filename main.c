@@ -14,156 +14,212 @@
 #define HAS_PREV(p) ((p->size) & HAS_PREV_MASK)
 #define HAS_NEXT(p) ((p->size) & HAS_NEXT_MASK)
 
-typedef struct Chunk *t_chunk;
-typedef struct Chunk
+typedef struct Meta_Footer *m_footer;
+typedef struct Meta_Footer
 {
     size_t size;
-} Chunk;
+} Meta_Footer;
 
-#define META_SIZE sizeof(Chunk)
+typedef struct Meta_Header *m_header;
 
-t_chunk head = NULL;
+typedef struct Meta_Header
+{
+    size_t size;
+    m_header next; // TODO this can be added in free only
+    m_header prev;
+} Meta_Header;
 
-t_chunk get_footer(t_chunk h)
+#define META_HEADER_SIZE sizeof(Meta_Header)
+#define META_FOOTER_SIZE sizeof(Meta_Footer)
+
+static Meta_Header head_sentinel = {0, NULL, NULL};
+static Meta_Header tail_sentinel = {0, NULL, NULL};
+
+static m_header const HEAD = &head_sentinel;
+static m_header const TAIL = &tail_sentinel;
+char *start = NULL;
+char *end = NULL;
+
+void init()
+{
+    head_sentinel.next = TAIL;
+    tail_sentinel.prev = HEAD;
+    start = NULL;
+    end = NULL;
+}
+
+m_footer get_footer(m_header h)
 {
     char *f = (char *)h;
-    f += SIZE(h) + META_SIZE;
-    return (t_chunk)f;
+    f += SIZE(h) + META_HEADER_SIZE;
+    return (m_footer)f;
 }
 
-t_chunk get_header(t_chunk f)
+m_header get_header(m_footer f)
 {
     char *h = (char *)f;
-    h -= SIZE(f) + META_SIZE;
-    return (t_chunk)h;
+    h -= SIZE(f) + META_HEADER_SIZE;
+    return (m_header)h;
 }
 
-t_chunk get_next_chunk(t_chunk p)
+m_header get_next_chunk(m_header p)
 {
-    if (!HAS_NEXT(p))
+    if (((char *)p >= end) || !HAS_NEXT(p))
         return NULL;
 
     char *n = (char *)p;
-    n += META_SIZE + SIZE(p) + META_SIZE;
-    return (t_chunk)n;
+    n += META_HEADER_SIZE + SIZE(p) + META_FOOTER_SIZE;
+    return (m_header)n;
 }
 
-t_chunk get_prev_chunk(t_chunk p)
+m_header get_prev_chunk(m_header p)
 {
-    if (!HAS_PREV(p))
+    if (((char *)p <= start) || !HAS_PREV(p))
         return NULL;
-    t_chunk f = p - 1;
-
-    char *n = (char *)f;
-    n -= META_SIZE + SIZE(f);
-    return (t_chunk)n;
+    m_footer f = ((m_footer)p) - 1;
+    char *n = (char *)p;
+    n -= META_FOOTER_SIZE + SIZE(f) + META_HEADER_SIZE;
+    return (m_header)n;
 }
 
-t_chunk create_chunk(size_t size)
+m_header create_chunk(size_t size)
 {
-    t_chunk p = sbrk(0);
-    if (sbrk(size + (2 * META_SIZE)) == (void *)-1)
+    m_header p = sbrk(0);
+    if (sbrk(size + META_HEADER_SIZE + META_FOOTER_SIZE) == (void *)-1)
         return NULL;
+
+    if (!start)
+    {
+        start = (char *)p;
+    }
+    end = (char *)p;
 
     p->size = size;
     p->size |= FREE_MASK;
+    p->next = NULL;
+    p->prev = NULL;
 
-    t_chunk f = get_footer(p);
+    m_footer f = get_footer(p);
     f->size = size;
     f->size |= FREE_MASK;
     return p;
 }
 
-t_chunk find_chunk(t_chunk *last, size_t size)
+m_header find_chunk(size_t size)
 {
-    t_chunk current = head;
-    while (current && !(IS_FREE(current) && (SIZE(current)) >= size))
+    m_header current = HEAD->next;
+    while (current && current->next && SIZE(current) < size)
     {
-        *last = current;
-        current = get_next_chunk(current);
+        current = current->next;
     }
-    return current;
+
+    if (current != TAIL)
+    {
+        current->next->prev = current->prev;
+        current->prev->next = current->next;
+        current->next = NULL;
+        current->prev = NULL;
+        return current;
+    }
+    return NULL;
 }
 
 void *my_malloc(size_t size)
 {
     size = align8(size);
-    if (!head)
-    {
-        head = create_chunk(size);
-    }
-    t_chunk last = head;
-    t_chunk p = find_chunk(&last, size);
+    m_header p = find_chunk(size);
+
     if (!p)
     {
         p = create_chunk(size);
     }
 
-    if (last != p)
+    if ((char *)p != start)
     {
-        last->size |= HAS_NEXT_MASK;
         p->size |= HAS_PREV_MASK;
+        m_header last_h = get_prev_chunk(p);
+        last_h->size |= HAS_NEXT_MASK;
+        m_footer last_f = get_footer(last_h);
+        last_f->size = last_h->size;
     }
 
     p->size &= ~FREE_MASK;
-    t_chunk f = get_footer(p);
+    m_footer f = get_footer(p);
     f->size = p->size;
     return (void *)(p + 1);
 }
 
-t_chunk fusion(t_chunk chunk)
+m_header fusion(m_header chunk)
 {
-    t_chunk next = get_next_chunk(chunk);
+    m_header next = get_next_chunk(chunk);
 
     if (next && IS_FREE(next))
     {
-        t_chunk n_next = get_next_chunk(next);
-        chunk->size += META_SIZE + SIZE(next) + META_SIZE;
+        chunk->size += META_HEADER_SIZE + SIZE(next) + META_FOOTER_SIZE;
+
+        next->next->prev = next->prev;
+        next->prev->next = next->next;
+
+        m_header n_next = get_next_chunk(next);
         if (!n_next)
         {
             chunk->size &= ~HAS_NEXT_MASK;
         }
     }
 
-    t_chunk prev = get_prev_chunk(chunk);
+    m_header prev = get_prev_chunk(chunk);
     if (prev && IS_FREE(prev))
     {
-        prev->size += META_SIZE + SIZE(chunk) + META_SIZE;
+
+        prev->next->prev = prev->prev;
+        prev->prev->next = prev->next;
+
+        prev->size += META_HEADER_SIZE + SIZE(chunk) + META_FOOTER_SIZE;
         prev->size |= chunk->size & HAS_NEXT_MASK;
         chunk = prev;
     }
+
+    m_footer footer = get_footer(chunk);
+    footer->size = chunk->size;
 
     return chunk;
 }
 
 void my_free(void *p)
 {
-    t_chunk chunk = (t_chunk)p - 1;
+    m_header chunk = (m_header)p - 1;
 
     assert(IS_FREE(chunk) == 0);
 
     chunk = fusion(chunk);
 
     chunk->size |= FREE_MASK;
+    m_footer footer = get_footer(chunk);
+    footer->size |= FREE_MASK;
 
-    t_chunk footer = get_footer(chunk);
-    footer->size = chunk->size;
+    chunk->next = HEAD->next;
+    chunk->prev = HEAD;
+    HEAD->next->prev = chunk;
+    HEAD->next = chunk;
 }
 
 int main()
 {
+    init();
     int *a = my_malloc(sizeof(int));
+    m_header aa = (m_header)a - 1;
+    my_free(a);
     int *b = my_malloc(sizeof(int));
-    int *c = my_malloc(sizeof(int));
-    Chunk *aa = (Chunk *)a - 1;
-    Chunk *bb = (Chunk *)b - 1;
+    m_header bb = (m_header)b - 1;
+    my_free(b);
+    int *c = my_malloc(2 * sizeof(int));
 
-    Chunk *cc = (Chunk *)c - 1;
+    m_header cc = (m_header)c - 1;
 
+    assert(b == a);
+    assert(c == a);
     *a = 5;
     my_free(c);
-    my_free(a);
-    my_free(b);
     printf("b %ld\n", SIZE(bb));
     printf("c %ld\n", SIZE(cc));
     printf("a %ld\n", SIZE(aa));
