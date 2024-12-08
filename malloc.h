@@ -6,8 +6,8 @@
 #include <stdbool.h>
 #include <assert.h>
 
-void *my_malloc(size_t size);
-void my_free(void *ptr);
+void *xmalloc(size_t size);
+void xfree(void *ptr);
 void init(void);
 
 #endif

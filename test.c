@@ -6,22 +6,22 @@ int main() {
     init();
     
     // Basic allocation test
-    void *p1 = my_malloc(16);
-    void *p2 = my_malloc(32);
-    void *p3 = my_malloc(64);
+    void *p1 = xmalloc(16);
+    void *p2 = xmalloc(32);
+    void *p3 = xmalloc(64);
 
     // Free and reallocation test
-    my_free(p2);
-    void *p4 = my_malloc(32);
+    xfree(p2);
+    void *p4 = xmalloc(32);
     assert(p4 == p2);  // Should reuse the same block
 
     // Multiple free and coalescing test
-    my_free(p1);
-    my_free(p3);
-    my_free(p4);
+    xfree(p1);
+    xfree(p3);
+    xfree(p4);
 
     // Large allocation after coalescing
-    void *p5 = my_malloc(112);
+    void *p5 = xmalloc(112);
     assert(p5 == p1);  // Should reuse the coalesced block
 
     printf("All tests passed.\n");

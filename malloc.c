@@ -28,7 +28,7 @@ void init() {
     end = NULL;
 }
 
-void *my_malloc(size_t size) {
+void *xmalloc(size_t size) {
     size = ALIGN8(size);
     m_header_p p = find_chunk(size);
 
@@ -54,7 +54,7 @@ void *my_malloc(size_t size) {
     return (void *)(p + 1);
 }
 
-void my_free(void *p) {
+void xfree(void *p) {
     m_header_p chunk = (m_header_p)p - 1;
     assert(IS_FREE(chunk) == 0);
 
